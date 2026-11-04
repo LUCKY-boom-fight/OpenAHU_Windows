@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>OpenAHU.Api</RootNamespace>
+    <AssemblyName>OpenAHU.Api</AssemblyName>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <!--
+    契约边界：
+    1. 本服务只依赖 OpenAHU.Contracts；**不引用** EF Core / Microsoft.Data.Sqlite，
+       数据库访问必须经由 04 Application 定义的接口，由 05 Infrastructure 实现。
+    2. 未引入 Microsoft.AspNetCore.OpenApi：本机无 NuGet 还原能力，无法确定版本与仓库 SDK 对齐，
+       留待合约 freeze PR 合并后单独加（见 README「未完成」）。
+    3. 未开启 TreatWarningsAsErrors：本机无 .NET SDK，未做编译验证。
+  -->
+
+  <ItemGroup>
+    <ProjectReference Include="..\OpenAHU.Contracts\OpenAHU.Contracts.csproj" />
+  </ItemGroup>
+
+</Project>
