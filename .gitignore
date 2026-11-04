@@ -1,0 +1,22 @@
+# 构建产物
+bin/
+obj/
+.vs/
+*.user
+*.suo
+
+# 运行时数据库与握手文件：由后端在 %LocalAppData%\OpenAHU 下管理，绝不入库
+campus.db
+campus.db-wal
+campus.db-shm
+session.json
+session.json.tmp
+
+# 起草用草稿（PR 描述等），提 PR 前删除，不入库
+PR_DRAFT_*.md
+
+# 本地临时目录
+.dsh-tmp/
+
+# 说明：03_数据库交付/OpenAHU_demo.sqlite3 是任务包自带的演示资料，
+# 是否纳入仓库待组长决定，因此这里不忽略 *.sqlite3。
