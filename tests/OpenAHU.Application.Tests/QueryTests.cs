@@ -55,10 +55,25 @@ public sealed class QueryTests
     {
         var harness = ApplicationHarness.Create().WithDemoData();
 
-        // demo-001 没有选 2027 春季学期的课，但学期本身存在。
+        // 前提：学期存在（不存在才是 404），但该学生这一学期一门课都没选。
+        // 演示库里 demo-001 其实选了春季的 course-004，所以这里换成只选秋季课的 demo-002。
+        harness.Store.Settings["active_demo_student_id"] = "demo-002";
+
         var courses = await harness.CourseQuery.GetByTermAsync(ApplicationHarness.SpringTerm, Ct);
 
         Assert.Empty(courses);
+    }
+
+    [Fact]
+    public async Task 课表_演示学生甲的春季只有course004()
+    {
+        var harness = ApplicationHarness.Create().WithDemoData();
+
+        // 钉住种子事实：demo-001 的春季并非空课表（course-004 就在春季）。
+        // 上面那条“空课表”用例必须用没选春季课的学生，否则前提与期望自相矛盾。
+        var courses = await harness.CourseQuery.GetByTermAsync(ApplicationHarness.SpringTerm, Ct);
+
+        Assert.Equal(new[] { "course-004" }, courses.Select(x => x.Id).ToArray());
     }
 
     [Fact]
