@@ -166,6 +166,9 @@ switch (exception)
 
 ## 5. 你需要改的三处（都在你的目录里，我不动）
 
+> 完整可粘贴的代码见同目录 `INTEGRATION_03_接入代码.md`（含整份 `ApiExceptionHandler`、`Program.cs`、
+> 9 个端点实现与 DTO 映射、写接口响应映射、验证脚本）。下面是摘要。
+
 1. `src/OpenAHU.Api/OpenAHU.Api.csproj` 增加：
    ```xml
    <ProjectReference Include="..\OpenAHU.Application\OpenAHU.Application.csproj" />
