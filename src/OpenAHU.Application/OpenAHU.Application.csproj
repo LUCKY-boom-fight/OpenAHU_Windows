@@ -24,4 +24,12 @@
     4. TreatWarningsAsErrors 未开：与既有工程一致，严格化由 06 号在 CI 中统一开启。
   -->
 
+  <!--
+    业务单元测试需要直接测内部的 CourseWriteValidator / WeekNumberNormalizer。
+    用内部可见性而不是把它们公开，避免业务实现细节进入 03 号可依赖的公共契约。
+  -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="OpenAHU.Application.Tests" />
+  </ItemGroup>
+
 </Project>

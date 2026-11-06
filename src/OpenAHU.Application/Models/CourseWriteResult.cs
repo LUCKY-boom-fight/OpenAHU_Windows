@@ -42,6 +42,7 @@ public sealed class CourseWriteResult
     private CourseWriteResult(
         CourseWriteStatus status,
         string? courseId,
+        Course? course,
         string? field,
         string? message,
         int enrolledStudentCount,
@@ -50,6 +51,7 @@ public sealed class CourseWriteResult
     {
         Status = status;
         CourseId = courseId;
+        Course = course;
         Field = field;
         Message = message;
         EnrolledStudentCount = enrolledStudentCount;
@@ -65,6 +67,16 @@ public sealed class CourseWriteResult
     /// <see cref="CourseWriteStatus.NotFound"/> 时回显请求里的 id，其余情况为 <c>null</c>。
     /// </summary>
     public string? CourseId { get; }
+
+    /// <summary>
+    /// 写入后的课程完整状态，供 Api 直接映射为 <c>CourseDto</c>。
+    /// </summary>
+    /// <remarks>
+    /// 对应 03 号在 <c>Contracts/README.md</c> 冻结的写接口响应：
+    /// <c>POST</c> → 201 + <c>CourseDto</c>、<c>PUT</c> → 200 + 更新后的 <c>CourseDto</c>、<c>DELETE</c> → 204（无响应体）。
+    /// 因此新增与编辑会带回课程，删除返回 <c>null</c>（<c>DELETE</c> 不需要响应体）。
+    /// </remarks>
+    public Course? Course { get; }
 
     /// <summary>校验失败的字段名，使用 JSON 字段名（<c>name</c>/<c>startSection</c>/<c>weekNumbers</c> …），供前端定位输入框。</summary>
     public string? Field { get; }
@@ -92,6 +104,27 @@ public sealed class CourseWriteResult
         return new CourseWriteResult(
             CourseWriteStatus.Ok,
             courseId,
+            course: null,
+            field: null,
+            message: null,
+            Math.Max(0, enrolledStudentCount),
+            Math.Max(0, otherStudentCount),
+            conflictReason: null);
+    }
+
+    /// <summary>写入成功，并带回写入后的课程（供 <c>POST</c>/<c>PUT</c> 直接映射 <c>CourseDto</c>）。</summary>
+    /// <param name="course">写入后的完整课程。</param>
+    /// <param name="enrolledStudentCount">操作后的选课人数。</param>
+    /// <param name="otherStudentCount">除当前演示学生外的选课人数。</param>
+    /// <returns>成功结果。</returns>
+    public static CourseWriteResult Ok(Course course, int enrolledStudentCount, int otherStudentCount)
+    {
+        ArgumentNullException.ThrowIfNull(course);
+        ArgumentException.ThrowIfNullOrWhiteSpace(course.Id);
+        return new CourseWriteResult(
+            CourseWriteStatus.Ok,
+            course.Id,
+            course,
             field: null,
             message: null,
             Math.Max(0, enrolledStudentCount),
@@ -107,7 +140,15 @@ public sealed class CourseWriteResult
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(field);
         ArgumentException.ThrowIfNullOrWhiteSpace(message);
-        return new CourseWriteResult(CourseWriteStatus.ValidationFailed, null, field, message, 0, 0, null);
+        return new CourseWriteResult(
+            CourseWriteStatus.ValidationFailed,
+            courseId: null,
+            course: null,
+            field,
+            message,
+            enrolledStudentCount: 0,
+            otherStudentCount: 0,
+            conflictReason: null);
     }
 
     /// <summary>学期不存在。</summary>
@@ -118,6 +159,7 @@ public sealed class CourseWriteResult
         return new CourseWriteResult(
             CourseWriteStatus.UnknownTerm,
             courseId: null,
+            course: null,
             field: "termId",
             message: "所选学期不存在，请刷新学期列表后重试。",
             enrolledStudentCount: 0,
@@ -125,7 +167,7 @@ public sealed class CourseWriteResult
             conflictReason: null);
     }
 
-    /// <summary>课程不存在。</summary>
+    /// <summary>课程不存在（或不在当前演示学生的课表里）。</summary>
     /// <param name="courseId">请求里的课程 id。</param>
     /// <returns>404 对应的结果。</returns>
     public static CourseWriteResult NotFound(string courseId)
@@ -133,6 +175,7 @@ public sealed class CourseWriteResult
         return new CourseWriteResult(
             CourseWriteStatus.NotFound,
             courseId,
+            course: null,
             field: null,
             message: "课程不存在，可能已被删除，请刷新课表。",
             enrolledStudentCount: 0,
@@ -147,6 +190,14 @@ public sealed class CourseWriteResult
     public static CourseWriteResult Conflict(CourseConflictReason reason, string message)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(message);
-        return new CourseWriteResult(CourseWriteStatus.Conflict, null, null, message, 0, 0, reason);
+        return new CourseWriteResult(
+            CourseWriteStatus.Conflict,
+            courseId: null,
+            course: null,
+            field: null,
+            message,
+            enrolledStudentCount: 0,
+            otherStudentCount: 0,
+            conflictReason: reason);
     }
 }

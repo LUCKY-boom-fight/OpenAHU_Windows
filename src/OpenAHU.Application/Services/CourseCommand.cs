@@ -107,7 +107,7 @@ public sealed class CourseCommand : ICourseCommand
             },
             cancellationToken).ConfigureAwait(false);
 
-        return CourseWriteResult.Ok(course.Id, enrolledStudentCount: 1, otherStudentCount: 0);
+        return CourseWriteResult.Ok(course, enrolledStudentCount: 1, otherStudentCount: 0);
     }
 
     /// <inheritdoc />
@@ -127,6 +127,13 @@ public sealed class CourseCommand : ICourseCommand
 
         var existing = await _courses.FindAsync(courseId, cancellationToken);
         if (existing is null)
+        {
+            return CourseWriteResult.NotFound(courseId);
+        }
+
+        // 维护范围限定在当前演示学生自己的课表内。不存在与“不属于我”统一返回 404，
+        // 避免外部构造课程 id 就能探测或改动别人课表的内容。
+        if (!await IsEnrolledAsync(student.Id, existing, cancellationToken))
         {
             return CourseWriteResult.NotFound(courseId);
         }
@@ -168,19 +175,20 @@ public sealed class CourseCommand : ICourseCommand
             return conflict;
         }
 
-        // 影响面先统计好再写：编辑共享课程行会同步改变其他选修者的课表。
-        var enrolled = await _enrollments.CountByCourseAsync(courseId, cancellationToken);
-        var others = await _enrollments.CountOthersByCourseAsync(courseId, student.Id, cancellationToken);
-
-        await _unitOfWork.ExecuteAsync(
+        // 影响面统计与写入放进同一个事务：编辑共享课程行会同步改变其他选修者的课表，
+        // 人数必须在写入前的一刻读取，否则前端警示的“影响 N 人”可能是过期值。
+        return await _unitOfWork.ExecuteAsync(
             async token =>
             {
+                var enrolled = await _enrollments.CountByCourseAsync(courseId, token).ConfigureAwait(false);
+                var others = await _enrollments
+                    .CountOthersByCourseAsync(courseId, student.Id, token)
+                    .ConfigureAwait(false);
+
                 await _courses.UpdateAsync(updated, token).ConfigureAwait(false);
-                return true;
+                return CourseWriteResult.Ok(updated, enrolled, others);
             },
             cancellationToken).ConfigureAwait(false);
-
-        return CourseWriteResult.Ok(courseId, enrolled, others);
     }
 
     /// <inheritdoc />
@@ -199,32 +207,44 @@ public sealed class CourseCommand : ICourseCommand
             return CourseWriteResult.NotFound(courseId);
         }
 
-        // 成绩与考试先于课程存在，删除课程会让它们随外键级联消失 —— 这是不可逆的数据丢失，
-        // 因此一律 409 拒绝，并告诉用户“先删成绩/考试”。判定不区分学生：别人的成绩同样不能被静默删掉。
-        if (await _grades.ExistsByCourseAsync(courseId, cancellationToken))
+        // 维护范围同编辑：只能删除自己课表里的课程，“不属于我”一律 404。
+        if (!await IsEnrolledAsync(student.Id, existing, cancellationToken))
         {
-            return CourseWriteResult.Conflict(
-                CourseConflictReason.HasGrades,
-                "该课程已有成绩记录，删除会导致成绩一并丢失，已拒绝。请先移除对应成绩后再删除课程。");
+            return CourseWriteResult.NotFound(courseId);
         }
 
-        if (await _exams.ExistsByCourseAsync(courseId, cancellationToken))
-        {
-            return CourseWriteResult.Conflict(
-                CourseConflictReason.HasExams,
-                "该课程已有考试安排，删除会导致考试信息一并丢失，已拒绝。请先移除对应考试后再删除课程。");
-        }
+        // 关联检查必须与删除处于同一事务。
+        // 若在事务外检查，中间窗口新写入的成绩/考试会被外键级联静默删掉（不可逆），
+        // 05 号的原子删除条件会拒绝这种并发变化，但它只能报 503；放进事务内才能稳定返回 409。
+        return await _unitOfWork.ExecuteAsync(
+            async token =>
+            {
+                if (await _grades.ExistsByCourseAsync(courseId, token).ConfigureAwait(false))
+                {
+                    return CourseWriteResult.Conflict(
+                        CourseConflictReason.HasGrades,
+                        "该课程已有成绩记录，删除会导致成绩一并丢失，已拒绝。请先移除对应成绩后再删除课程。");
+                }
 
-        var enrolled = await _enrollments.CountByCourseAsync(courseId, cancellationToken);
-        var others = await _enrollments.CountOthersByCourseAsync(courseId, student.Id, cancellationToken);
+                if (await _exams.ExistsByCourseAsync(courseId, token).ConfigureAwait(false))
+                {
+                    return CourseWriteResult.Conflict(
+                        CourseConflictReason.HasExams,
+                        "该课程已有考试安排，删除会导致考试信息一并丢失，已拒绝。请先移除对应考试后再删除课程。");
+                }
 
-        var deleted = await _unitOfWork.ExecuteAsync(
-            token => _courses.DeleteAsync(courseId, token),
+                var enrolled = await _enrollments.CountByCourseAsync(courseId, token).ConfigureAwait(false);
+                var others = await _enrollments
+                    .CountOthersByCourseAsync(courseId, student.Id, token)
+                    .ConfigureAwait(false);
+
+                var deleted = await _courses.DeleteAsync(courseId, token).ConfigureAwait(false);
+
+                return deleted
+                    ? CourseWriteResult.Ok(courseId, enrolled, others)
+                    : CourseWriteResult.NotFound(courseId);
+            },
             cancellationToken).ConfigureAwait(false);
-
-        return deleted
-            ? CourseWriteResult.Ok(courseId, enrolled, others)
-            : CourseWriteResult.NotFound(courseId);
     }
 
     /// <summary>生成本地课程主键。</summary>
@@ -232,6 +252,20 @@ public sealed class CourseCommand : ICourseCommand
     private static string CreateCourseId()
     {
         return CourseIdPrefix + Guid.NewGuid().ToString("N")[..12];
+    }
+
+    /// <summary>判断课程是否在当前演示学生的课表内，用于限定编辑/删除的维护范围。</summary>
+    /// <param name="studentId">当前演示学生主键（由后端解析，不接受外部传入）。</param>
+    /// <param name="course">目标课程，用其 <see cref="Course.TermId"/> 缩小查询范围。</param>
+    /// <param name="cancellationToken">取消标记。</param>
+    /// <returns>在该学生的选课关系内为 <c>true</c>。</returns>
+    private async Task<bool> IsEnrolledAsync(string studentId, Course course, CancellationToken cancellationToken)
+    {
+        var courses = await _courses
+            .GetByStudentAndTermAsync(studentId, course.TermId, cancellationToken)
+            .ConfigureAwait(false);
+
+        return courses.Any(item => string.Equals(item.Id, course.Id, StringComparison.Ordinal));
     }
 
     /// <summary>检测与同一学生同学期其他课程的时间冲突。</summary>

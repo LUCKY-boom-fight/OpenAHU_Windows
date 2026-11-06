@@ -201,56 +201,86 @@ group.MapGet("/courses", async (string termId, ICourseQuery query, HttpContext c
 });
 ```
 
-## 6. 一个尚未冻结的契约缺口（需要你或组长定）
+## 6. 写接口响应约定（已对齐 03 号 `Contracts/README.md`）
 
-写接口成功时的**响应体**在冻结文档里没有定义。`CourseWriteResult` 已经带了前端需要的信息
-（`CourseId` / `EnrolledStudentCount` / `OtherStudentCount`），建议：
+03 号已在 `src/OpenAHU.Contracts/README.md` 冻结写接口响应，本层据此调整，**不再提议新的响应 DTO**：
+
+| 接口 | 约定 | 本层如何配合 |
+| --- | --- | --- |
+| `POST /local/courses` | `201` + `CourseDto`（含新 id），`Location` 指向新资源 | `CourseWriteResult.Course` 带回完整课程，直接映射 |
+| `PUT /local/courses/{id}` | `200` + 更新后的 `CourseDto` | 同上 |
+| `DELETE /local/courses/{id}` | `204` 无响应体 | 只有 `CourseId`，`Course` 为 `null` |
+
+```csharp
+var result = await command.CreateAsync(draft, ct);
+if (result.Status == CourseWriteStatus.Ok)
+{
+    var dto = new CourseDto(result.Course!.Id, result.Course.Name, /* … */);
+    return Results.Created($"/api/v1/local/courses/{dto.Id}", dto);
+}
+```
+
+### 唯一遗留：`OtherStudentCount` 无处安放
+
+`EnrolledStudentCount` / `OtherStudentCount` 在冻结的 `CourseDto` 里没有字段，
+但 2 号要做“该课程还有 N 名学生选修，修改会同步影响他们”的警示。
+
+**建议（成本最低、不动 DTO）**：写成响应头，不需要新类型、不需要评审：
 
 ```
-POST /api/v1/local/courses        → 200 { "id": "...", "enrolledStudentCount": 1, "otherStudentCount": 0 }
-PUT  /api/v1/local/courses/{id}   → 200 { "id": "...", "enrolledStudentCount": 2, "otherStudentCount": 1 }
-DELETE /api/v1/local/courses/{id} → 200 { "id": "...", "enrolledStudentCount": 2, "otherStudentCount": 1 }
+X-OpenAHU-Enrolled-Students: 2
+X-OpenAHU-Other-Students: 1
 ```
 
-这需要你新增一个 `CourseWriteResponseDto`（属于契约变更，按规定走评审）。
-若想完全不动契约，退路是 `204 No Content` + 前端写完自己重拉课表——功能上够用，但少了一次影响面提示的机会。
+若 3 号/组长认为响应头不便于前端读取，退路是放弃该提示——功能不残缺，只是少一次提醒。
 
 ## 7. 验证状态（如实记录，不声称通过）
 
-**未执行**：
+**已执行（由 05 号代为编译）**
 
-- `dotnet restore / build / test`：本机 `dotnet --version` 报 **No .NET SDKs were found**，与 3 号环境一致。
-- 单元测试：4 号交付项含“业务单元测试”，尚未编写（需 SDK + xUnit 还原环境），
-  这是本模块**未完成的一项**，见第 8 节。
+- 05 号在 .NET SDK 10.0.403 下执行 `dotnet build src/OpenAHU.Infrastructure/`，
+  **Application + Infrastructure 一起编译，0 警告 0 错误**。这是本层第一次通过真实编译。
+- 05 号用真实 `CourseCommand` 跑了 57 项集成测试（含新增/编辑/删除/重启持久化），全部通过。
 
-**已做的静态自查**：
+**本次修订后未再编译**
 
-- 全层零 NuGet 依赖、零 `ProjectReference`（符合方案 A 与仓库现状）；
-- 无 `using Microsoft.EntityFrameworkCore` / `Microsoft.Data.Sqlite` / `System.Windows`；
-- 所有仓储接口不暴露 EF 类型，异常类型不使用 `SqliteException`；
-- 写链路对“可预期失败”只返回结果、不抛异常，异常仅用于 503。
+在 05 号交回之后，本层又做了三处改动（见第 10 节），**这三处尚未编译验证**，
+需在有 SDK 的机器上重跑 `dotnet build src/OpenAHU.Application/OpenAHU.Application.csproj`。
 
 ## 8. 下一步（按优先级）
 
-1. **5 号**：按 `HANDOFF_05_仓储接口与业务约定.md` 实现 9 个接口 → 解锁 Gate A/B/C。
+1. **5 号**：按 `HANDOFF_05_仓储接口与业务约定.md` 实现 9 个接口 → ✅ 已完成（57 项测试通过）。
 2. **3 号**：接第 5 节三处改动 + 第 4 节异常分支 → 6 个占位端点转真实查询。
 3. **4 号**：补业务单元测试（见第 9 节）。
 
-## 9. 待补单元测试用例矩阵（4 号交付项，尚未编写）
+## 9. 业务单元测试（`tests/OpenAHU.Application.Tests/`）
 
-不建测试工程的原因：本机无 SDK，无法确定 net10.0 下 `xunit` / `Microsoft.NET.Test.Sdk` 的可用版本；
-5 号已有“27 项测试通过”的环境，**沿用那套包版本**比另造一版更稳，避免 CI 因为版本猜错而红。
+包版本沿用 5 号已验证的组合，避免 CI 因版本猜错而红：
 
-测试用**手写假仓储**（内存 `List`），不引 EF、不用 Moq：
+```xml
+<PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.0.1" />
+<PackageReference Include="xunit" Version="2.9.3" />
+<PackageReference Include="xunit.runner.visualstudio" Version="3.1.5" />
+```
+
+用手写假仓储（内存 `List`），不引 EF、不用 Moq，因此测试不依赖数据库文件。
 
 | 被测对象 | 用例 |
 | --- | --- |
 | `CourseWriteValidator` | 空名/超长名；`startSection` 越界；`endSection < startSection`；周次为空；周次超出 `WeekCount`；`DayOfWeek` 非法值 |
-| `CourseCommand.CreateAsync` | 正常创建 → `Ok` 且 id 前缀 `course-local-`；未知学期 → `UnknownTerm`；周次越界 → `ValidationFailed("weekNumbers")`；与已有课程同日同节且有共同周 → `ValidationFailed("startSection")`；单双周错开 → **不**冲突 |
-| `CourseCommand.UpdateAsync` | 课程不存在 → `NotFound`；跳过自身不算冲突；`OtherStudentCount > 0` 时仍允许并回传人数 |
-| `CourseCommand.DeleteAsync` | 有成绩 → `Conflict(HasGrades)`；有考试 → `Conflict(HasExams)`；都没有 → `Ok` 且仓储确实被调用 |
+| `CourseCommand.CreateAsync` | 正常创建 → `Ok` 且带回课程、id 前缀 `course-local-`；未知学期 → `UnknownTerm`；周次越界 → `ValidationFailed("weekNumbers")`；同日同节且有共同周 → `ValidationFailed("startSection")`；单双周错开 → **不**冲突 |
+| `CourseCommand.UpdateAsync` | 课程不存在 → `NotFound`；**只选修了别人课表的课程 → `NotFound`**；跳过自身不算冲突；`OtherStudentCount > 0` 时仍允许并回传人数 |
+| `CourseCommand.DeleteAsync` | 有成绩 → `Conflict(HasGrades)`；有考试 → `Conflict(HasExams)`；都没有 → `Ok`；**检查发生在事务内**（假 `IUnitOfWork` 断言回调被调用） |
 | `CourseQuery` | 输出周次升序去重；排序为 **周一→周日**（防 `DayOfWeek` 周日=0 的错位）；未知 `termId` → `CampusResourceNotFoundException` |
 | `GradeQuery` / `ExamQuery` | 空成绩保持 `null`（不得变 0）；考试按 `StartsAt` 升序且 `null` 排末尾 |
 | `ActiveStudentProvider` | 设置缺失 → `CampusStoreUnavailableException`；学生不存在 → 同上 |
-| `IUnitOfWork` 契约 | 写操作抛异常时，假仓储状态不发生变化（验证业务层没有“先写一半再校验”） |
+
+## 10. 响应 05 号提出的三个问题（本次修订）
+
+| 问题 | 结论 | 改动 |
+| --- | --- | --- |
+| ①`Update`/`Delete` 按全局 `courseId` 查找，未限制当前学生 | **收紧**：只能维护自己课表里的课程，“不属于我”返回 404（不泄露存在性） | `CourseCommand` 新增 `IsEnrolledAsync` 前置校验 |
+| ② 关联检查在事务外，并发时被 05 号的原子条件拦成 503 | **采纳 05 号建议**：检查、计数、删除放进同一个 `IUnitOfWork.ExecuteAsync` | `DeleteAsync` 重写；`UpdateAsync` 的计数也移入事务 |
+| ③ 本层建议的 `200 +{id,counts}` 与 03 号的 `201/200 + CourseDto`、`204` 不一致 | **服从 03 号已冻结的契约**，本层补 `Course` 回传 | `CourseWriteResult.Ok(Course, …)`；计数改走响应头 |
+
 
